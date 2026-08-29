@@ -5,7 +5,7 @@ import asyncio
 import edge_tts
 from moviepy.editor import ImageClip, AudioFileClip, CompositeVideoClip
 
-# 1. GENERATE STORY SCRIPT
+# 1. GENERATE STORY SCRIPT WITH FALLBACK MODELS
 def get_story_script():
     api_key = os.getenv("GROQ_API_KEY")
     if not api_key:
@@ -15,16 +15,28 @@ def get_story_script():
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     
     prompt = "Write a compelling 30-second suspense story script (approx 60 words). Return ONLY the script text."
-    data = {
-        "model": "mixtral-8x7b-32768",
-        "messages": [{"role": "user", "content": prompt}]
-    }
-    response = requests.post(url, headers=headers, json=data).json()
     
-    if 'choices' not in response:
-        raise Exception(f"Groq API Error Response: {response}")
-        
-    return response['choices'][0]['message']['content']
+    # List of models to attempt in order of priority
+    candidate_models = [
+        "llama-3.1-8b-instant",
+        "llama-3.3-70b-versatile",
+        "meta-llama/llama-4-scout-17b-16e-instruct",
+        "qwen/qwen3-32b"
+    ]
+    
+    last_response = None
+    for model in candidate_models:
+        data = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}]
+        }
+        res = requests.post(url, headers=headers, json=data).json()
+        if 'choices' in res:
+            print(f"Successfully generated script using model: {model}")
+            return res['choices'][0]['message']['content']
+        last_response = res
+    
+    raise Exception(f"All Groq models failed. Last Response: {last_response}")
 
 # 2. GENERATE AUDIO
 async def generate_voice(text, output_file="voice.mp3"):
@@ -66,4 +78,4 @@ if __name__ == "__main__":
     create_moving_video("voice.mp3", "background.jpg", "final_short.mp4")
     
     print("Video successfully generated!")
-    
+                  
