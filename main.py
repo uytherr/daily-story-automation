@@ -13,14 +13,13 @@ def get_story_script():
         
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     
-    # Dynamically fetch available models from Groq account
+    # Fetch active models
     models_url = "https://api.groq.com/openai/v1/models"
     models_res = requests.get(models_url, headers=headers).json()
     
     if "data" not in models_res:
         raise Exception(f"Failed to fetch model list from Groq. Response: {models_res}")
         
-    # Extract model IDs and filter for text/chat models
     available_models = [
         m["id"] for m in models_res["data"] 
         if "whisper" not in m["id"].lower() and "guard" not in m["id"].lower()
@@ -31,7 +30,6 @@ def get_story_script():
 
     print(f"Discovered available models: {available_models}")
     
-    # Try models from the active dynamic list
     completions_url = "https://api.groq.com/openai/v1/chat/completions"
     prompt = "Write a compelling 30-second suspense story script (approx 60 words). Return ONLY the script text."
     
@@ -54,14 +52,20 @@ async def generate_voice(text, output_file="voice.mp3"):
     communicate = edge_tts.Communicate(text, "en-US-ChristopherNeural")
     await communicate.save(output_file)
 
-# 3. GENERATE VISUAL
+# 3. GENERATE VISUAL (SAFE DOWNLOAD WITH PROMPT TRUNCATION)
 def generate_image(prompt_text, output_file="background.jpg"):
-    clean_prompt = requests.utils.quote(f"cinematic dark story illustration, {prompt_text}")
-    url = f"https://gen.pollinations.ai/image/{clean_prompt}?width=1080&height=1920&nologo=true"
+    # Extract short prompt summary (first 100 chars) to prevent HTTP 400 errors
+    short_prompt = prompt_text.replace("\n", " ")[:100]
+    clean_prompt = requests.utils.quote(f"cinematic dark suspense illustration, {short_prompt}")
     
-    img_data = requests.get(url).content
+    url = f"https://image.pollinations.ai/prompt/{clean_prompt}?width=1080&height=1920&nologo=true"
+    
+    res = requests.get(url, timeout=30)
+    if res.status_code != 200 or not res.content:
+        raise Exception(f"Image generation failed with HTTP status code: {res.status_code}")
+        
     with open(output_file, 'wb') as f:
-        f.write(img_data)
+        f.write(res.content)
 
 # 4. EDIT VERTICAL VIDEO WITH ZOOM MOTION
 def create_moving_video(audio_path, image_path, output_path="final_short.mp4"):
@@ -89,4 +93,4 @@ if __name__ == "__main__":
     create_moving_video("voice.mp3", "background.jpg", "final_short.mp4")
     
     print("Video successfully generated!")
-    
+                                                                          
