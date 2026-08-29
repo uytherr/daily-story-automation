@@ -16,7 +16,7 @@ def get_story_script():
     
     prompt = "Write a compelling 30-second suspense story script (approx 60 words). Return ONLY the script text."
     data = {
-        "model": "llama-3.3-70b-versatile",
+        "model": "mixtral-8x7b-32768",
         "messages": [{"role": "user", "content": prompt}]
     }
     response = requests.post(url, headers=headers, json=data).json()
