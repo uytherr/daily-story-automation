@@ -1,0 +1,5 @@
+requests
+edge-tts
+moviepy
+google-api-python-client
+google-auth-oauthlib
