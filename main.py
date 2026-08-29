@@ -10,6 +10,10 @@ import asyncio
 import edge_tts
 from moviepy.editor import ImageClip, AudioFileClip, CompositeVideoClip, concatenate_videoclips
 
+from google.oauth2.credentials import Credentials
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
+
 VOICES = [
     "en-US-ChristopherNeural",  # Deep male narrator
     "en-US-EricNeural",         # Dark intense male voice
@@ -72,19 +76,17 @@ def get_story_script():
 
     raise Exception(f"Failed to generate script. Last Response: {last_response}")
 
-# 2. GENERATE VOICE OVER AND SAVE FILE
+# 2. GENERATE VOICE OVER
 async def generate_voice(text, output_file="voice.mp3"):
     selected_voice = random.choice(VOICES)
     print(f"Selected Narrator Voice: {selected_voice}")
     communicate = edge_tts.Communicate(text, selected_voice)
     await communicate.save(output_file)
 
-# 3. GENERATE 4 DISTINCT IMAGES FOR VISUAL VARIETY
+# 3. GENERATE 4 IMAGES WITH RETRIES & TIMEOUT FALLBACK
 def generate_4_images(prompt_text):
     selected_style = random.choice(ART_STYLES)
     words = prompt_text.split()
-    
-    # Divide the script into 4 segments so each image represents a different part of the story
     chunk_size = max(1, len(words) // 4)
     image_paths = []
     
@@ -93,44 +95,52 @@ def generate_4_images(prompt_text):
         segment_prompt = " ".join(segment_words)[:90].replace("\n", " ")
         clean_prompt = requests.utils.quote(f"{selected_style}, {segment_prompt}")
         
-        url = f"https://image.pollinations.ai/prompt/{clean_prompt}?width=1080&height=1920&nologo=true"
         filename = f"image_{i+1}.jpg"
-        
         print(f"Downloading image {i+1}/4...")
-        res = requests.get(url, timeout=30)
         
-        if res.status_code == 200 and res.content:
-            with open(filename, 'wb') as f:
-                f.write(res.content)
-            image_paths.append(filename)
-        else:
-            raise Exception(f"Failed to download image {i+1}")
+        primary_url = f"https://image.pollinations.ai/prompt/{clean_prompt}?width=1080&height=1920&nologo=true"
+        backup_url = f"https://loremflickr.com/1080/1920/horror,dark/all?lock={random.randint(1, 99999)}"
+        
+        success = False
+        for attempt in range(3):
+            try:
+                res = requests.get(primary_url, timeout=60)
+                if res.status_code == 200 and res.content:
+                    with open(filename, 'wb') as f:
+                        f.write(res.content)
+                    image_paths.append(filename)
+                    success = True
+                    break
+            except Exception:
+                print(f"Attempt {attempt + 1} timed out for image {i+1}. Retrying...")
+        
+        if not success:
+            print(f"Primary API failed. Fetching fallback image for {i+1}/4...")
+            res = requests.get(backup_url, timeout=30)
+            if res.status_code == 200 and res.content:
+                with open(filename, 'wb') as f:
+                    f.write(res.content)
+                image_paths.append(filename)
+            else:
+                raise Exception(f"Failed to download image {i+1} from all sources.")
             
     return image_paths
 
-# 4. CONCATENATE 4 IMAGES WITH MOTION ACROSS THE ENTIRE AUDIO
+# 4. CONCATENATE 4 IMAGES WITH MOTION ACROSS ENTIRE AUDIO
 def create_moving_video(audio_path, image_paths, output_path="final_short.mp4"):
     audio = AudioFileClip(audio_path)
     total_duration = audio.duration
     
     print(f"Audio Duration: {total_duration:.2f} seconds")
-    
-    # Calculate screen time per image (e.g., 50s / 4 images = 12.5s per image)
     clip_duration = total_duration / len(image_paths)
     
     video_clips = []
-    for i, img_path in enumerate(image_paths):
-        # Create image clip for its allocated duration
+    for img_path in image_paths:
         img_clip = ImageClip(img_path).set_duration(clip_duration)
-        
-        # Apply slight zoom effect
         moving_clip = img_clip.resize(lambda t: 1 + 0.03 * t)
-        
-        # Crop/Format to 1080x1920
         formatted_clip = CompositeVideoClip([moving_clip.set_position("center")], size=(1080, 1920)).set_duration(clip_duration)
         video_clips.append(formatted_clip)
     
-    # Combine all 4 image clips sequentially
     final_video = concatenate_videoclips(video_clips, method="compose")
     final_video = final_video.set_audio(audio)
     
@@ -141,8 +151,47 @@ def create_moving_video(audio_path, image_paths, output_path="final_short.mp4"):
         audio_codec="aac"
     )
     
-    # Close audio handle
     audio.close()
+
+# 5. OPTIONAL DIRECT YOUTUBE UPLOADER
+def upload_to_youtube(video_path):
+    client_id = os.getenv("YOUTUBE_CLIENT_ID")
+    client_secret = os.getenv("YOUTUBE_CLIENT_SECRET")
+    refresh_token = os.getenv("YOUTUBE_REFRESH_TOKEN")
+
+    if not all([client_id, client_secret, refresh_token]):
+        print("YouTube credentials missing in GitHub Secrets. Saving video locally/artifacts.")
+        return
+
+    creds = Credentials(
+        token=None,
+        refresh_token=refresh_token,
+        token_uri="https://oauth2.googleapis.com/token",
+        client_id=client_id,
+        client_secret=client_secret
+    )
+
+    youtube = build("youtube", "v3", credentials=creds)
+
+    body = {
+        "snippet": {
+            "title": "Terrifying Horror Legend You Haven't Heard #shorts #horror #scarystories",
+            "description": "A terrifying daily scary story legend. Like and subscribe for more creepy stories!",
+            "tags": ["shorts", "horror", "scarystories", "scary", "creepy", "urbanlegends"],
+            "categoryId": "24"
+        },
+        "status": {
+            "privacyStatus": "public",
+            "selfDeclaredMadeForKids": False
+        }
+    }
+
+    media = MediaFileUpload(video_path, chunksize=-1, resumable=True, mimetype="video/mp4")
+    request = youtube.videos().insert(part="snippet,status", body=body, media_body=media)
+    
+    print("Uploading video to YouTube Shorts...")
+    response = request.execute()
+    print(f"Video uploaded successfully! YouTube Video ID: {response.get('id')}")
 
 if __name__ == "__main__":
     print("Step 1: Writing 40-60 second horror script...")
@@ -152,11 +201,14 @@ if __name__ == "__main__":
     print("Step 2: Generating voiceover...")
     asyncio.run(generate_voice(script, "voice.mp3"))
     
-    print("Step 3: Generating 4 scary images...")
+    print("Step 3: Generating 4 scary images with timeout safeguards...")
     images = generate_4_images(script)
     
-    print("Step 4: Rendering video with 4 image transitions...")
+    print("Step 4: Rendering video with transitions...")
     create_moving_video("voice.mp3", images, "final_short.mp4")
     
-    print("Success! 4-image 40-60 second video generated successfully!")
-            
+    print("Step 5: Attempting YouTube upload...")
+    upload_to_youtube("final_short.mp4")
+    
+    print("Workflow finished successfully!")
+    
