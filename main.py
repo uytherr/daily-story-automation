@@ -8,6 +8,9 @@ from moviepy.editor import ImageClip, AudioFileClip, CompositeVideoClip
 # 1. GENERATE STORY SCRIPT
 def get_story_script():
     api_key = os.getenv("GROQ_API_KEY")
+    if not api_key:
+        raise ValueError("GROQ_API_KEY environment variable is missing.")
+        
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     
@@ -17,6 +20,10 @@ def get_story_script():
         "messages": [{"role": "user", "content": prompt}]
     }
     response = requests.post(url, headers=headers, json=data).json()
+    
+    if 'choices' not in response:
+        raise Exception(f"Groq API Error Response: {response}")
+        
     return response['choices'][0]['message']['content']
 
 # 2. GENERATE AUDIO
