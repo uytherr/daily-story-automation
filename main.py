@@ -5,38 +5,49 @@ import asyncio
 import edge_tts
 from moviepy.editor import ImageClip, AudioFileClip, CompositeVideoClip
 
-# 1. GENERATE STORY SCRIPT WITH FALLBACK MODELS
+# 1. GENERATE STORY SCRIPT BY AUTOMATICALLY DISCOVERING ACTIVE MODELS
 def get_story_script():
     api_key = os.getenv("GROQ_API_KEY")
     if not api_key:
         raise ValueError("GROQ_API_KEY environment variable is missing.")
         
-    url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     
-    prompt = "Write a compelling 30-second suspense story script (approx 60 words). Return ONLY the script text."
+    # Dynamically fetch available models from Groq account
+    models_url = "https://api.groq.com/openai/v1/models"
+    models_res = requests.get(models_url, headers=headers).json()
     
-    # List of models to attempt in order of priority
-    candidate_models = [
-        "llama-3.1-8b-instant",
-        "llama-3.3-70b-versatile",
-        "meta-llama/llama-4-scout-17b-16e-instruct",
-        "qwen/qwen3-32b"
+    if "data" not in models_res:
+        raise Exception(f"Failed to fetch model list from Groq. Response: {models_res}")
+        
+    # Extract model IDs and filter for text/chat models
+    available_models = [
+        m["id"] for m in models_res["data"] 
+        if "whisper" not in m["id"].lower() and "guard" not in m["id"].lower()
     ]
     
+    if not available_models:
+        raise Exception("No active text generation models found on your Groq account.")
+
+    print(f"Discovered available models: {available_models}")
+    
+    # Try models from the active dynamic list
+    completions_url = "https://api.groq.com/openai/v1/chat/completions"
+    prompt = "Write a compelling 30-second suspense story script (approx 60 words). Return ONLY the script text."
+    
     last_response = None
-    for model in candidate_models:
+    for model in available_models:
         data = {
             "model": model,
             "messages": [{"role": "user", "content": prompt}]
         }
-        res = requests.post(url, headers=headers, json=data).json()
+        res = requests.post(completions_url, headers=headers, json=data).json()
         if 'choices' in res:
             print(f"Successfully generated script using model: {model}")
             return res['choices'][0]['message']['content']
         last_response = res
-    
-    raise Exception(f"All Groq models failed. Last Response: {last_response}")
+
+    raise Exception(f"Failed to generate script using discovered models. Last Response: {last_response}")
 
 # 2. GENERATE AUDIO
 async def generate_voice(text, output_file="voice.mp3"):
@@ -78,4 +89,4 @@ if __name__ == "__main__":
     create_moving_video("voice.mp3", "background.jpg", "final_short.mp4")
     
     print("Video successfully generated!")
-                  
+    
