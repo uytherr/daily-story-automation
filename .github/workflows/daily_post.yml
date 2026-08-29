@@ -1,33 +1,41 @@
-name: Daily Automatic Story Generation
+name: Daily Automatic Horror Shorts (3x Daily)
 
 on:
-  schedule:
-    - cron: '0 12 * * *'
   workflow_dispatch:
+  schedule:
+    # 3 Optimal Viral Times for YouTube Shorts:
+    # 1. 06:00 UTC (11:30 AM IST / 2:00 AM EST - Early Morning Scroll)
+    # 2. 15:00 UTC (8:30 PM IST / 11:00 AM EST - Evening Primetime Peak)
+    # 3. 22:00 UTC (3:30 AM IST / 6:00 PM EST - Late Night Horror Wave)
+    - cron: '0 6 * * *'
+    - cron: '0 15 * * *'
+    - cron: '0 22 * * *'
 
 jobs:
   build-and-post:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v3
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      - name: Install System Dependencies
+      - name: Install Dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
-      - name: Install Python Packages
-        run: pip install -r requirements.txt
-
-      - name: Run Engine
+      - name: Run Main Generation Script
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
         run: python main.py
-        
+
+      - name: Save Video to GitHub Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: horror-story-${{ github.run_id }}
+          path: final_short.mp4
+          
