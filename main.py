@@ -59,4 +59,4 @@ if __name__ == "__main__":
     create_moving_video("voice.mp3", "background.jpg", "final_short.mp4")
     
     print("Video successfully generated!")
-  
+    
