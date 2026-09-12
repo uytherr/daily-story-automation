@@ -6,7 +6,7 @@ import requests
 import asyncio
 import edge_tts
 from groq import Groq
-from moviepy.editor import ImageClip, AudioFileClip, TextClip, CompositeVideoClip, concatenate_videoclips
+from moviepy.editor import ImageClip, AudioFileClip, CompositeVideoClip, concatenate_videoclips
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
@@ -21,8 +21,43 @@ REFRESH_TOKEN = os.getenv("YOUTUBE_REFRESH_TOKEN")
 # Initialize Groq Client
 groq_client = Groq(api_key=GROQ_API_KEY)
 
+# Dynamically select an available and working text model from Groq
+def get_working_model():
+    try:
+        models_page = groq_client.models.list()
+        # Filter for text chat models (exclude whisper audio and guard models)
+        available_models = [
+            m.id for m in models_page.data 
+            if "whisper" not in m.id and "guard" not in m.id
+        ]
+        
+        # Priority order for text models
+        preferred = [
+            "llama-3.1-8b-instant", 
+            "llama-3.3-70b-versatile", 
+            "mixtral-8x7b-32768",
+            "llama3-8b-8192"
+        ]
+        
+        for pref in preferred:
+            if pref in available_models:
+                print(f"Using dynamic model: {pref}")
+                return pref
+                
+        # Fallback to the first available text model
+        if available_models:
+            print(f"Using available model: {available_models[0]}")
+            return available_models[0]
+            
+    except Exception as e:
+        print(f"Failed to fetch dynamic models ({e}), using hardcoded fallback.")
+        
+    return "llama-3.1-8b-instant"
+
 # 1. Generate Horror Script & Image Prompts
 def generate_content():
+    selected_model = get_working_model()
+    
     prompt = """
     Generate a 30-second terrifying horror story for YouTube Shorts.
     Return the response in this exact format:
@@ -32,7 +67,7 @@ def generate_content():
     PROMPT3: <Detailed image prompt for scene 3>
     """
     response = groq_client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
+        model=selected_model,
         messages=[{"role": "user", "content": prompt}],
         temperature=0.8,
     )
@@ -41,11 +76,21 @@ def generate_content():
     story = ""
     prompts = []
     for line in content.split("\n"):
+        line = line.strip()
         if line.startswith("STORY:"):
             story = line.replace("STORY:", "").strip()
         elif line.startswith("PROMPT"):
-            prompts.append(line.split(":", 1)[1].strip())
+            if ":" in line:
+                prompts.append(line.split(":", 1)[1].strip())
             
+    # Fallback prompt if list is empty
+    if not prompts:
+        prompts = [
+            "Terrifying dark corridor, cinematic horror lighting, photorealistic",
+            "Creepy monster shadow in a dark room, hyperrealistic horror",
+            "Scary spooky face emerging from darkness, 8k resolution"
+        ]
+        
     return story, prompts
 
 # 2. Generate Audio (Voiceover)
@@ -57,12 +102,12 @@ async def generate_audio(text, output_file="voiceover.mp3"):
 def download_image(prompt, filename):
     encoded_prompt = requests.utils.quote(prompt)
     url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1080&height=1920&model=flux&seed={random.randint(1, 999999)}"
-    response = requests.get(url)
+    response = requests.get(url, timeout=30)
     if response.status_code == 200:
         with open(filename, "wb") as f:
             f.write(response.content)
     else:
-        raise Exception(f"Failed to fetch image: {response.status_code}")
+        raise Exception(f"Failed to fetch image: Status {response.status_code}")
 
 # 4. Assemble Video with MoviePy
 def create_video(story, image_files, audio_file, output_file="final_short.mp4"):
@@ -89,9 +134,7 @@ def upload_to_youtube(video_path, title, description):
         scopes=["https://www.googleapis.com/auth/youtube.upload"]
     )
     
-    # Refresh token if needed
     creds.refresh(Request())
-    
     youtube = build("youtube", "v3", credentials=creds)
     
     body = {
@@ -99,7 +142,7 @@ def upload_to_youtube(video_path, title, description):
             "title": title[:100],
             "description": description,
             "tags": ["horror", "scary", "shorts", "scarystories", "creepy"],
-            "categoryId": "24"  # Entertainment
+            "categoryId": "24"
         },
         "status": {
             "privacyStatus": "public",
@@ -142,3 +185,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
