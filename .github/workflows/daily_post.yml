@@ -1,25 +1,20 @@
-name: Daily Automatic Horror Shorts (3x Daily)
+name: Daily Horror Short Pipeline
 
 on:
-  workflow_dispatch:
   schedule:
-    # 3 Optimal Viral Times for YouTube Shorts:
-    # 1. 06:00 UTC (11:30 AM IST / 2:00 AM EST - Early Morning Scroll)
-    # 2. 15:00 UTC (8:30 PM IST / 11:00 AM EST - Evening Primetime Peak)
-    # 3. 22:00 UTC (3:30 AM IST / 6:00 PM EST - Late Night Horror Wave)
-    - cron: '0 6 * * *'
-    - cron: '0 15 * * *'
-    - cron: '0 22 * * *'
+    - cron: '0 15 * * *'  # Runs daily at 15:00 UTC
+  workflow_dispatch:        # Allows manual triggering via GitHub interface
 
 jobs:
-  build-and-post:
+  run-pipeline:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
+      - name: Checkout Code
+        uses: actions/checkout@v3
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v4
         with:
           python-version: '3.10'
 
@@ -28,14 +23,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run Main Generation Script
+      - name: Run Script Pipeline
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
         run: python main.py
-
-      - name: Save Video to GitHub Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: horror-story-${{ github.run_id }}
-          path: final_short.mp4
-          
+        
