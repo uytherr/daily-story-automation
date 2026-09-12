@@ -4,9 +4,10 @@ import sys
 import time
 import requests
 import asyncio
+import concurrent.futures
 import edge_tts
 from groq import Groq
-from moviepy.editor import ImageClip, AudioFileClip, CompositeVideoClip, concatenate_videoclips
+from moviepy.editor import ImageClip, AudioFileClip, concatenate_videoclips
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
@@ -18,58 +19,57 @@ CLIENT_ID = os.getenv("YOUTUBE_CLIENT_ID")
 CLIENT_SECRET = os.getenv("YOUTUBE_CLIENT_SECRET")
 REFRESH_TOKEN = os.getenv("YOUTUBE_REFRESH_TOKEN")
 
-# Initialize Groq Client
 groq_client = Groq(api_key=GROQ_API_KEY)
 
-# Dynamically select an available and working text model from Groq
+# Dynamic Model Selection (Fast Text Models)
 def get_working_model():
     try:
         models_page = groq_client.models.list()
-        # Filter for text chat models (exclude whisper audio and guard models)
         available_models = [
             m.id for m in models_page.data 
             if "whisper" not in m.id and "guard" not in m.id
         ]
         
-        # Priority order for text models
         preferred = [
             "llama-3.1-8b-instant", 
             "llama-3.3-70b-versatile", 
-            "mixtral-8x7b-32768",
-            "llama3-8b-8192"
+            "mixtral-8x7b-32768"
         ]
         
         for pref in preferred:
             if pref in available_models:
-                print(f"Using dynamic model: {pref}")
+                print(f"Using model: {pref}")
                 return pref
                 
-        # Fallback to the first available text model
         if available_models:
-            print(f"Using available model: {available_models[0]}")
             return available_models[0]
             
     except Exception as e:
-        print(f"Failed to fetch dynamic models ({e}), using hardcoded fallback.")
+        print(f"Failed to fetch dynamic models ({e}), falling back.")
         
     return "llama-3.1-8b-instant"
 
-# 1. Generate Horror Script & Image Prompts
+# 1. Fast Script Generation (Suppresses thinking tokens)
 def generate_content():
     selected_model = get_working_model()
     
-    prompt = """
+    system_prompt = "You are a direct horror scriptwriter. Do NOT include thinking process, intros, or explanations. Return ONLY requested output."
+    user_prompt = """
     Generate a 30-second terrifying horror story for YouTube Shorts.
-    Return the response in this exact format:
-    STORY: <The full narrated horror story, around 50-60 words>
-    PROMPT1: <Detailed image prompt for scene 1>
-    PROMPT2: <Detailed image prompt for scene 2>
-    PROMPT3: <Detailed image prompt for scene 3>
+    Return response in this exact format:
+    STORY: <The narrated horror story, around 50-60 words>
+    PROMPT1: <Detailed horror image prompt for scene 1>
+    PROMPT2: <Detailed horror image prompt for scene 2>
+    PROMPT3: <Detailed horror image prompt for scene 3>
     """
+    
     response = groq_client.chat.completions.create(
         model=selected_model,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.8,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ],
+        temperature=0.7,
     )
     content = response.choices[0].message.content
     
@@ -83,7 +83,6 @@ def generate_content():
             if ":" in line:
                 prompts.append(line.split(":", 1)[1].strip())
             
-    # Fallback prompt if list is empty
     if not prompts:
         prompts = [
             "Terrifying dark corridor, cinematic horror lighting, photorealistic",
@@ -93,23 +92,39 @@ def generate_content():
         
     return story, prompts
 
-# 2. Generate Audio (Voiceover)
+# 2. Voiceover Generation
 async def generate_audio(text, output_file="voiceover.mp3"):
     communicate = edge_tts.Communicate(text, "en-US-ChristopherNeural")
     await communicate.save(output_file)
 
-# 3. Download Image from Pollinations AI (Flux Model)
-def download_image(prompt, filename):
+# 3. Parallel Image Generation with Retry & Extended Timeout
+def download_single_image(args):
+    prompt, filename = args
     encoded_prompt = requests.utils.quote(prompt)
     url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1080&height=1920&model=flux&seed={random.randint(1, 999999)}"
-    response = requests.get(url, timeout=30)
-    if response.status_code == 200:
-        with open(filename, "wb") as f:
-            f.write(response.content)
-    else:
-        raise Exception(f"Failed to fetch image: Status {response.status_code}")
+    
+    # Retry up to 3 times on timeout
+    for attempt in range(3):
+        try:
+            response = requests.get(url, timeout=120)
+            if response.status_code == 200:
+                with open(filename, "wb") as f:
+                    f.write(response.content)
+                print(f"Downloaded {filename}")
+                return filename
+        except requests.exceptions.RequestException as e:
+            print(f"Attempt {attempt + 1} failed for {filename}: {e}")
+            time.sleep(2)
+            
+    raise Exception(f"Failed to download image {filename} after 3 attempts.")
 
-# 4. Assemble Video with MoviePy
+def download_images_parallel(prompts):
+    tasks = [(prompt, f"image_{i}.jpg") for i, prompt in enumerate(prompts)]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+        results = list(executor.map(download_single_image, tasks))
+    return results
+
+# 4. Fast Video Rendering
 def create_video(story, image_files, audio_file, output_file="final_short.mp4"):
     audio = AudioFileClip(audio_file)
     duration_per_image = audio.duration / len(image_files)
@@ -121,9 +136,16 @@ def create_video(story, image_files, audio_file, output_file="final_short.mp4"):
         
     video = concatenate_videoclips(clips, method="compose")
     video = video.set_audio(audio)
-    video.write_videofile(output_file, fps=30, codec="libx264", audio_codec="aac")
+    video.write_videofile(
+        output_file, 
+        fps=30, 
+        codec="libx264", 
+        audio_codec="aac",
+        preset="ultrafast",  # Drastically cuts encoding time
+        threads=4
+    )
 
-# 5. Authenticate and Upload to YouTube
+# 5. YouTube Uploading
 def upload_to_youtube(video_path, title, description):
     creds = Credentials(
         token=None,
@@ -169,12 +191,8 @@ def main():
     print("Generating voiceover...")
     asyncio.run(generate_audio(story))
     
-    image_files = []
-    print("Generating images...")
-    for i, prompt in enumerate(prompts):
-        filename = f"image_{i}.jpg"
-        download_image(prompt, filename)
-        image_files.append(filename)
+    print("Generating images in parallel...")
+    image_files = download_images_parallel(prompts)
         
     print("Creating video...")
     create_video(story, image_files, "voiceover.mp3")
