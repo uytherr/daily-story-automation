@@ -19,37 +19,41 @@ CLIENT_ID = os.getenv("YOUTUBE_CLIENT_ID")
 CLIENT_SECRET = os.getenv("YOUTUBE_CLIENT_SECRET")
 REFRESH_TOKEN = os.getenv("YOUTUBE_REFRESH_TOKEN")
 
+# Initialize Groq Client
 groq_client = Groq(api_key=GROQ_API_KEY)
 
-# Dynamic Model Selection (Fast Text Models)
+# Dynamic Model Selection (Filters out third-party/terms-required models)
 def get_working_model():
     try:
         models_page = groq_client.models.list()
-        available_models = [
-            m.id for m in models_page.data 
-            if "whisper" not in m.id and "guard" not in m.id
+        
+        # Priority list of standard zero-setup text models on Groq
+        preferred = [
+            "llama-3.1-8b-instant",
+            "llama-3.3-70b-versatile",
+            "mixtral-8x7b-32768",
+            "llama3-8b-8192"
         ]
         
-        preferred = [
-            "llama-3.1-8b-instant", 
-            "llama-3.3-70b-versatile", 
-            "mixtral-8x7b-32768"
-        ]
+        active_model_ids = [m.id for m in models_page.data]
         
         for pref in preferred:
-            if pref in available_models:
-                print(f"Using model: {pref}")
+            if pref in active_model_ids:
+                print(f"Using standard model: {pref}")
                 return pref
                 
-        if available_models:
-            return available_models[0]
-            
+        # Filter out third-party provider models (e.g. models with '/') to avoid terms acceptance errors
+        for m in active_model_ids:
+            if ("llama" in m or "mixtral" in m) and "guard" not in m and "whisper" not in m and "/" not in m:
+                print(f"Using fallback model: {m}")
+                return m
+                
     except Exception as e:
-        print(f"Failed to fetch dynamic models ({e}), falling back.")
+        print(f"Failed to fetch dynamic models ({e}), using hardcoded fallback.")
         
     return "llama-3.1-8b-instant"
 
-# 1. Fast Script Generation (Suppresses thinking tokens)
+# 1. Fast Script Generation (Suppresses internal thinking process)
 def generate_content():
     selected_model = get_working_model()
     
@@ -97,13 +101,12 @@ async def generate_audio(text, output_file="voiceover.mp3"):
     communicate = edge_tts.Communicate(text, "en-US-ChristopherNeural")
     await communicate.save(output_file)
 
-# 3. Parallel Image Generation with Retry & Extended Timeout
+# 3. Parallel Image Generation with Retries and Extended Timeout
 def download_single_image(args):
     prompt, filename = args
     encoded_prompt = requests.utils.quote(prompt)
     url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1080&height=1920&model=flux&seed={random.randint(1, 999999)}"
     
-    # Retry up to 3 times on timeout
     for attempt in range(3):
         try:
             response = requests.get(url, timeout=120)
@@ -124,7 +127,7 @@ def download_images_parallel(prompts):
         results = list(executor.map(download_single_image, tasks))
     return results
 
-# 4. Fast Video Rendering
+# 4. Ultra-Fast Video Rendering
 def create_video(story, image_files, audio_file, output_file="final_short.mp4"):
     audio = AudioFileClip(audio_file)
     duration_per_image = audio.duration / len(image_files)
@@ -141,7 +144,7 @@ def create_video(story, image_files, audio_file, output_file="final_short.mp4"):
         fps=30, 
         codec="libx264", 
         audio_codec="aac",
-        preset="ultrafast",  # Drastically cuts encoding time
+        preset="ultrafast",
         threads=4
     )
 
