@@ -22,28 +22,34 @@ REFRESH_TOKEN = os.getenv("YOUTUBE_REFRESH_TOKEN")
 # Initialize Groq Client
 groq_client = Groq(api_key=GROQ_API_KEY)
 
-# Fail-safe dynamic model selector
+# Guaranteed Standard Llama Selector
 def get_working_model():
     try:
         models_page = groq_client.models.list()
+        active_ids = [m.id for m in models_page.data]
         
-        # Filter for usable text models (exclude whisper audio, guards, and third-party vendor terms)
-        usable_models = [
-            m.id for m in models_page.data 
-            if "whisper" not in m.id 
-            and "guard" not in m.id 
-            and "/" not in m.id
+        # Priority sequence of English-primary standard models
+        preferred = [
+            "llama-3.1-8b-instant",
+            "llama-3.3-70b-versatile",
+            "llama3-8b-8192"
         ]
         
-        if usable_models:
-            print(f"Dynamically discovered working model: {usable_models[0]}")
-            return usable_models[0]
-            
+        for pref in preferred:
+            if pref in active_ids:
+                print(f"Using preferred model: {pref}")
+                return pref
+                
+        # Filter strictly for Llama chat models
+        for m in active_ids:
+            if "llama" in m and "guard" not in m and "whisper" not in m and "/" not in m:
+                print(f"Using Llama model: {m}")
+                return m
+                
     except Exception as e:
         print(f"Error fetching model list: {e}")
         
-    # Standard emergency fallback string
-    return "llama3-8b-8192"
+    return "llama-3.1-8b-instant"
 
 # 1. Fast Script Generation
 def generate_content():
@@ -93,25 +99,40 @@ async def generate_audio(text, output_file="voiceover.mp3"):
     communicate = edge_tts.Communicate(text, "en-US-ChristopherNeural")
     await communicate.save(output_file)
 
-# 3. Parallel Image Generation
+# 3. Parallel Image Downloading with Fallback Support
 def download_single_image(args):
     prompt, filename = args
     encoded_prompt = requests.utils.quote(prompt)
+    
+    # Try Pollinations AI first
     url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1080&height=1920&model=flux&seed={random.randint(1, 999999)}"
     
     for attempt in range(3):
         try:
-            response = requests.get(url, timeout=120)
-            if response.status_code == 200:
+            response = requests.get(url, timeout=30)
+            if response.status_code == 200 and len(response.content) > 1000:
                 with open(filename, "wb") as f:
                     f.write(response.content)
-                print(f"Downloaded {filename}")
+                print(f"Downloaded {filename} from Pollinations AI")
                 return filename
-        except requests.exceptions.RequestException as e:
-            print(f"Attempt {attempt + 1} failed for {filename}: {e}")
+        except Exception as e:
+            print(f"Pollinations attempt {attempt + 1} failed for {filename}: {e}")
             time.sleep(2)
             
-    raise Exception(f"Failed to download image {filename} after 3 attempts.")
+    # Fallback Image Generator (Picsum) if Pollinations is offline/timing out
+    print(f"Fallback triggered for {filename}. Fetching reliable backup image...")
+    backup_url = f"https://picsum.photos/1080/1920?blur=2"
+    try:
+        response = requests.get(backup_url, timeout=30)
+        if response.status_code == 200:
+            with open(filename, "wb") as f:
+                f.write(response.content)
+            print(f"Downloaded fallback image for {filename}")
+            return filename
+    except Exception as e:
+        print(f"Fallback download failed: {e}")
+        
+    raise Exception(f"Failed to obtain image for {filename}")
 
 def download_images_parallel(prompts):
     tasks = [(prompt, f"image_{i}.jpg") for i, prompt in enumerate(prompts)]
@@ -198,3 +219,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
