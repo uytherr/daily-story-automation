@@ -22,34 +22,40 @@ REFRESH_TOKEN = os.getenv("YOUTUBE_REFRESH_TOKEN")
 # Initialize Groq Client
 groq_client = Groq(api_key=GROQ_API_KEY)
 
-# Guaranteed Standard Llama Selector
+# Fail-safe dynamic model selector (strictly uses active models on your account)
 def get_working_model():
     try:
         models_page = groq_client.models.list()
         active_ids = [m.id for m in models_page.data]
         
-        # Priority sequence of English-primary standard models
+        # Priority list of standard English text chat models
         preferred = [
-            "llama-3.1-8b-instant",
             "llama-3.3-70b-versatile",
-            "llama3-8b-8192"
+            "llama3-8b-8192",
+            "llama3-70b-8192",
+            "mixtral-8x7b-32768"
         ]
         
         for pref in preferred:
             if pref in active_ids:
-                print(f"Using preferred model: {pref}")
+                print(f"Using standard model: {pref}")
                 return pref
                 
-        # Filter strictly for Llama chat models
+        # Filter for active Llama/Mistral text models (excluding third-party/specialized terms models)
         for m in active_ids:
-            if "llama" in m and "guard" not in m and "whisper" not in m and "/" not in m:
-                print(f"Using Llama model: {m}")
+            if ("llama" in m.lower() or "mixtral" in m.lower()) and "guard" not in m.lower() and "whisper" not in m.lower() and "/" not in m and "allam" not in m.lower():
+                print(f"Using discovered active model: {m}")
                 return m
                 
+        # Emergency catch: pick the absolute first active text model returned by your account
+        first_text_model = [m for m in active_ids if "whisper" not in m.lower() and "guard" not in m.lower()][0]
+        print(f"Using dynamic fallback model: {first_text_model}")
+        return first_text_model
+
     except Exception as e:
-        print(f"Error fetching model list: {e}")
+        print(f"Error fetching dynamic models: {e}")
         
-    return "llama-3.1-8b-instant"
+    return "llama3-8b-8192"
 
 # 1. Fast Script Generation
 def generate_content():
@@ -104,7 +110,6 @@ def download_single_image(args):
     prompt, filename = args
     encoded_prompt = requests.utils.quote(prompt)
     
-    # Try Pollinations AI first
     url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1080&height=1920&model=flux&seed={random.randint(1, 999999)}"
     
     for attempt in range(3):
@@ -119,8 +124,8 @@ def download_single_image(args):
             print(f"Pollinations attempt {attempt + 1} failed for {filename}: {e}")
             time.sleep(2)
             
-    # Fallback Image Generator (Picsum) if Pollinations is offline/timing out
-    print(f"Fallback triggered for {filename}. Fetching reliable backup image...")
+    # Reliable backup image if Pollinations is offline/timing out
+    print(f"Fallback triggered for {filename}. Fetching backup image...")
     backup_url = f"https://picsum.photos/1080/1920?blur=2"
     try:
         response = requests.get(backup_url, timeout=30)
@@ -219,4 +224,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
+                
