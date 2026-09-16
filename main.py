@@ -22,36 +22,37 @@ REFRESH_TOKEN = os.getenv("YOUTUBE_REFRESH_TOKEN")
 # Initialize Groq Client
 groq_client = Groq(api_key=GROQ_API_KEY)
 
-# Fail-safe dynamic model selector (strictly standard Llama/Mixtral models)
+# Guaranteed dynamic model selection with zero hardcoded model strings
 def get_working_model():
     try:
         models_page = groq_client.models.list()
-        active_ids = [m.id for m in models_page.data]
         
-        # Priority list of standard English text chat models
-        preferred = [
-            "llama-3.3-70b-versatile",
-            "llama3-8b-8192",
-            "llama3-70b-8192",
-            "mixtral-8x7b-32768"
-        ]
-        
-        for pref in preferred:
-            if pref in active_ids:
-                print(f"Using preferred model: {pref}")
-                return pref
-                
-        # Strict filter: ONLY allow models starting with llama or mixtral, no slashes, no third-party APIs
-        for m in active_ids:
-            clean_id = m.lower()
-            if (clean_id.startswith("llama") or clean_id.startswith("mixtral")) and "/" not in m and "guard" not in clean_id:
-                print(f"Using filtered standard model: {m}")
-                return m
+        # Filter out audio, vision, guardrails, and models requiring special terms/slashes
+        valid_models = []
+        for m in models_page.data:
+            m_id = m.id.lower()
+            if (
+                "/" not in m.id 
+                and "whisper" not in m_id 
+                and "guard" not in m_id 
+                and "vision" not in m_id
+                and "orpheus" not in m_id
+            ):
+                valid_models.append(m.id)
+
+        # Print all available models on your key for easy debugging
+        print(f"Available valid models for your API key: {valid_models}")
+
+        if valid_models:
+            # Pick the first valid text model returned by your account
+            selected = valid_models[0]
+            print(f"Selected working model: {selected}")
+            return selected
 
     except Exception as e:
         print(f"Error fetching dynamic models: {e}")
         
-    return "llama-3.3-70b-versatile"
+    raise RuntimeError("No available text chat models were found on your Groq API key.")
 
 # 1. Fast Script Generation
 def generate_content():
@@ -220,4 +221,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
