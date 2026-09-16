@@ -22,38 +22,30 @@ REFRESH_TOKEN = os.getenv("YOUTUBE_REFRESH_TOKEN")
 # Initialize Groq Client
 groq_client = Groq(api_key=GROQ_API_KEY)
 
-# Dynamic Model Selection (Filters out third-party/terms-required models)
+# Fail-safe dynamic model selector
 def get_working_model():
     try:
         models_page = groq_client.models.list()
         
-        # Priority list of standard zero-setup text models on Groq
-        preferred = [
-            "llama-3.1-8b-instant",
-            "llama-3.3-70b-versatile",
-            "mixtral-8x7b-32768",
-            "llama3-8b-8192"
+        # Filter for usable text models (exclude whisper audio, guards, and third-party vendor terms)
+        usable_models = [
+            m.id for m in models_page.data 
+            if "whisper" not in m.id 
+            and "guard" not in m.id 
+            and "/" not in m.id
         ]
         
-        active_model_ids = [m.id for m in models_page.data]
-        
-        for pref in preferred:
-            if pref in active_model_ids:
-                print(f"Using standard model: {pref}")
-                return pref
-                
-        # Filter out third-party provider models (e.g. models with '/') to avoid terms acceptance errors
-        for m in active_model_ids:
-            if ("llama" in m or "mixtral" in m) and "guard" not in m and "whisper" not in m and "/" not in m:
-                print(f"Using fallback model: {m}")
-                return m
-                
+        if usable_models:
+            print(f"Dynamically discovered working model: {usable_models[0]}")
+            return usable_models[0]
+            
     except Exception as e:
-        print(f"Failed to fetch dynamic models ({e}), using hardcoded fallback.")
+        print(f"Error fetching model list: {e}")
         
-    return "llama-3.1-8b-instant"
+    # Standard emergency fallback string
+    return "llama3-8b-8192"
 
-# 1. Fast Script Generation (Suppresses internal thinking process)
+# 1. Fast Script Generation
 def generate_content():
     selected_model = get_working_model()
     
@@ -101,7 +93,7 @@ async def generate_audio(text, output_file="voiceover.mp3"):
     communicate = edge_tts.Communicate(text, "en-US-ChristopherNeural")
     await communicate.save(output_file)
 
-# 3. Parallel Image Generation with Retries and Extended Timeout
+# 3. Parallel Image Generation
 def download_single_image(args):
     prompt, filename = args
     encoded_prompt = requests.utils.quote(prompt)
@@ -127,7 +119,7 @@ def download_images_parallel(prompts):
         results = list(executor.map(download_single_image, tasks))
     return results
 
-# 4. Ultra-Fast Video Rendering
+# 4. Fast Video Rendering
 def create_video(story, image_files, audio_file, output_file="final_short.mp4"):
     audio = AudioFileClip(audio_file)
     duration_per_image = audio.duration / len(image_files)
@@ -206,4 +198,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
