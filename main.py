@@ -22,7 +22,7 @@ REFRESH_TOKEN = os.getenv("YOUTUBE_REFRESH_TOKEN")
 # Initialize Groq Client
 groq_client = Groq(api_key=GROQ_API_KEY)
 
-# Fail-safe dynamic model selector (strictly uses active models on your account)
+# Fail-safe dynamic model selector (strictly standard Llama/Mixtral models)
 def get_working_model():
     try:
         models_page = groq_client.models.list()
@@ -38,24 +38,20 @@ def get_working_model():
         
         for pref in preferred:
             if pref in active_ids:
-                print(f"Using standard model: {pref}")
+                print(f"Using preferred model: {pref}")
                 return pref
                 
-        # Filter for active Llama/Mistral text models (excluding third-party/specialized terms models)
+        # Strict filter: ONLY allow models starting with llama or mixtral, no slashes, no third-party APIs
         for m in active_ids:
-            if ("llama" in m.lower() or "mixtral" in m.lower()) and "guard" not in m.lower() and "whisper" not in m.lower() and "/" not in m and "allam" not in m.lower():
-                print(f"Using discovered active model: {m}")
+            clean_id = m.lower()
+            if (clean_id.startswith("llama") or clean_id.startswith("mixtral")) and "/" not in m and "guard" not in clean_id:
+                print(f"Using filtered standard model: {m}")
                 return m
-                
-        # Emergency catch: pick the absolute first active text model returned by your account
-        first_text_model = [m for m in active_ids if "whisper" not in m.lower() and "guard" not in m.lower()][0]
-        print(f"Using dynamic fallback model: {first_text_model}")
-        return first_text_model
 
     except Exception as e:
         print(f"Error fetching dynamic models: {e}")
         
-    return "llama3-8b-8192"
+    return "llama-3.3-70b-versatile"
 
 # 1. Fast Script Generation
 def generate_content():
@@ -224,4 +220,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-                
+    
