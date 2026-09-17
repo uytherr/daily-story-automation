@@ -103,7 +103,7 @@ async def generate_audio(text, output_file="voiceover.mp3"):
     communicate = edge_tts.Communicate(text, "en-US-ChristopherNeural")
     await communicate.save(output_file)
 
-# 3. Parallel Image Downloading with Fallback
+# 3. Parallel Image Downloading with Fallback Support
 def download_single_image(args):
     prompt, filename = args
     encoded_prompt = requests.utils.quote(prompt)
