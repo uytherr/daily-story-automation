@@ -1,223 +1,141 @@
 import os
 import random
-import sys
-import time
 import requests
 import asyncio
-import concurrent.futures
-import edge_tts
 from groq import Groq
-from moviepy.editor import ImageClip, AudioFileClip, concatenate_videoclips
-from google.oauth2.credentials import Credentials
-from google.auth.transport.requests import Request
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload
+import edge_tts
+from moviepy.editor import (
+    TextClip,
+    AudioClip,
+    ImageClip,
+    CompositeVideoClip,
+    CompositeAudioClip,
+    AudioFileClip,
+)
 
-# Environment Variables
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-CLIENT_ID = os.getenv("YOUTUBE_CLIENT_ID")
-CLIENT_SECRET = os.getenv("YOUTUBE_CLIENT_SECRET")
-REFRESH_TOKEN = os.getenv("YOUTUBE_REFRESH_TOKEN")
-
-# Initialize Groq Client
-groq_client = Groq(api_key=GROQ_API_KEY)
-
-# Guaranteed dynamic model selection with zero hardcoded model strings
-def get_working_model():
-    try:
-        models_page = groq_client.models.list()
-        
-        # Filter out audio, vision, guardrails, and models requiring special terms/slashes
-        valid_models = []
-        for m in models_page.data:
-            m_id = m.id.lower()
-            if (
-                "/" not in m.id 
-                and "whisper" not in m_id 
-                and "guard" not in m_id 
-                and "vision" not in m_id
-                and "orpheus" not in m_id
-            ):
-                valid_models.append(m.id)
-
-        # Print all available models on your key for easy debugging
-        print(f"Available valid models for your API key: {valid_models}")
-
-        if valid_models:
-            # Pick the first valid text model returned by your account
-            selected = valid_models[0]
-            print(f"Selected working model: {selected}")
-            return selected
-
-    except Exception as e:
-        print(f"Error fetching dynamic models: {e}")
-        
-    raise RuntimeError("No available text chat models were found on your Groq API key.")
-
-# 1. Fast Script Generation
-def generate_content():
-    selected_model = get_working_model()
+# ---------------------------------------------------------------------------
+# 1. GENERATE HORROR STORY & VISUAL PROMPTS (GROQ)
+# ---------------------------------------------------------------------------
+def generate_story_and_prompts():
+    client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
     
-    system_prompt = "You are a direct horror scriptwriter. Do NOT include thinking process, intros, or explanations. Return ONLY requested output."
-    user_prompt = """
-    Generate a 30-second terrifying horror story for YouTube Shorts.
-    Return response in this exact format:
-    STORY: <The narrated horror story, around 50-60 words>
-    PROMPT1: <Detailed horror image prompt for scene 1>
-    PROMPT2: <Detailed horror image prompt for scene 2>
-    PROMPT3: <Detailed horror image prompt for scene 3>
+    prompt = """
+    Write a original, terrifying 30-second horror story suitable for YouTube Shorts.
+    Return ONLY a JSON object with this exact structure:
+    {
+        "story": "The terrifying narrative text here...",
+        "image_prompts": [
+            "A creepy prompt for image 1",
+            "A creepy prompt for image 2",
+            "A creepy prompt for image 3"
+        ]
+    }
     """
     
-    response = groq_client.chat.completions.create(
-        model=selected_model,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt}
-        ],
-        temperature=0.7,
+    response = client.chat.completions.create(
+        model="llama3-8b-8192",
+        messages=[{"role": "user", "content": prompt}],
+        response_format={"type": "json_object"}
     )
-    content = response.choices[0].message.content
     
-    story = ""
-    prompts = []
-    for line in content.split("\n"):
-        line = line.strip()
-        if line.startswith("STORY:"):
-            story = line.replace("STORY:", "").strip()
-        elif line.startswith("PROMPT"):
-            if ":" in line:
-                prompts.append(line.split(":", 1)[1].strip())
-            
-    if not prompts:
-        prompts = [
-            "Terrifying dark corridor, cinematic horror lighting, photorealistic",
-            "Creepy monster shadow in a dark room, hyperrealistic horror",
-            "Scary spooky face emerging from darkness, 8k resolution"
-        ]
-        
-    return story, prompts
+    import json
+    data = json.loads(response.choices[0].message.content)
+    return data["story"], data["image_prompts"]
 
-# 2. Voiceover Generation
-async def generate_audio(text, output_file="voiceover.mp3"):
-    communicate = edge_tts.Communicate(text, "en-US-ChristopherNeural")
+# ---------------------------------------------------------------------------
+# 2. GENERATE HIGH-QUALITY VOICE (EDGE-TTS)
+# ---------------------------------------------------------------------------
+async def generate_voiceover(text, output_file="voiceover.mp3"):
+    # Deep, sinister voice for horror content
+    voice = "en-US-ChristopherNeural" 
+    communicate = edge_tts.Communicate(text, voice, rate="-5%", pitch="-10Hz")
     await communicate.save(output_file)
 
-# 3. Parallel Image Downloading with Fallback Support
-def download_single_image(args):
-    prompt, filename = args
-    encoded_prompt = requests.utils.quote(prompt)
-    
-    url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1080&height=1920&model=flux&seed={random.randint(1, 999999)}"
-    
-    for attempt in range(3):
-        try:
-            response = requests.get(url, timeout=30)
-            if response.status_code == 200 and len(response.content) > 1000:
-                with open(filename, "wb") as f:
-                    f.write(response.content)
-                print(f"Downloaded {filename} from Pollinations AI")
-                return filename
-        except Exception as e:
-            print(f"Pollinations attempt {attempt + 1} failed for {filename}: {e}")
-            time.sleep(2)
-            
-    # Reliable backup image if Pollinations is offline/timing out
-    print(f"Fallback triggered for {filename}. Fetching backup image...")
-    backup_url = f"https://picsum.photos/1080/1920?blur=2"
-    try:
-        response = requests.get(backup_url, timeout=30)
-        if response.status_code == 200:
-            with open(filename, "wb") as f:
-                f.write(response.content)
-            print(f"Downloaded fallback image for {filename}")
-            return filename
-    except Exception as e:
-        print(f"Fallback download failed: {e}")
+# ---------------------------------------------------------------------------
+# 3. FETCH CINEMATIC HORROR IMAGES (POLLINATIONS AI)
+# ---------------------------------------------------------------------------
+def download_images(prompts):
+    image_files = []
+    for i, prompt in enumerate(prompts):
+        enhanced_prompt = f"cinematic horror, highly detailed, photorealistic, dark atmosphere, 8k resolution, {prompt}"
+        url = f"https://pollinations.ai/p/{requests.utils.quote(enhanced_prompt)}?width=1080&height=1920&seed={random.randint(1,10000)}&nologo=true"
         
-    raise Exception(f"Failed to obtain image for {filename}")
+        res = requests.get(url)
+        filename = f"image_{i}.jpg"
+        if res.status_code == 200:
+            with open(filename, "wb") as f:
+                f.write(res.content)
+            image_files.append(filename)
+        else:
+            print(f"Failed to fetch image for prompt {i}")
+    return image_files
 
-def download_images_parallel(prompts):
-    tasks = [(prompt, f"image_{i}.jpg") for i, prompt in enumerate(prompts)]
-    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
-        results = list(executor.map(download_single_image, tasks))
-    return results
-
-# 4. Fast Video Rendering
-def create_video(story, image_files, audio_file, output_file="final_short.mp4"):
-    audio = AudioFileClip(audio_file)
-    duration_per_image = audio.duration / len(image_files)
+# ---------------------------------------------------------------------------
+# 4. RENDER HIGH-QUALITY VIDEO (MOVIEPY)
+# ---------------------------------------------------------------------------
+def assemble_video(story_text, image_files, voiceover_file, output_file="final_short.mp4"):
+    audio_clip = AudioFileClip(voiceover_file)
+    duration = audio_clip.duration
+    
+    # Calculate duration per image
+    img_duration = duration / len(image_files) if image_files else duration
     
     clips = []
-    for img_path in image_files:
-        clip = ImageClip(img_path).set_duration(duration_per_image)
+    for i, img_path in enumerate(image_files):
+        clip = (
+            ImageClip(img_path)
+            .set_duration(img_duration)
+            .set_start(i * img_duration)
+            .resize(height=1920) # Ensures 9:16 vertical short layout
+            .crop(x_center=540, y_center=960, width=1080, height=1920)
+        )
         clips.append(clip)
-        
-    video = concatenate_videoclips(clips, method="compose")
-    video = video.set_audio(audio)
-    video.write_videofile(
-        output_file, 
-        fps=30, 
-        codec="libx264", 
+    
+    # Combine background images
+    video = CompositeVideoClip(clips)
+    
+    # Add Captions/Subtitles
+    txt_clip = (
+        TextClip(
+            story_text,
+            fontsize=48,
+            color='white',
+            font='Arial-Bold',
+            stroke_color='black',
+            stroke_width=3,
+            method='caption',
+            size=(900, None)
+        )
+        .set_pos(('center', 'center'))
+        .set_duration(duration)
+    )
+    
+    final_video = CompositeVideoClip([video, txt_clip]).set_audio(audio_clip)
+    final_video.write_videofile(
+        output_file,
+        fps=30,
+        codec="libx264",
         audio_codec="aac",
-        preset="ultrafast",
-        threads=4
+        preset="medium"
     )
 
-# 5. YouTube Uploading
-def upload_to_youtube(video_path, title, description):
-    creds = Credentials(
-        token=None,
-        refresh_token=REFRESH_TOKEN,
-        token_uri="https://oauth2.googleapis.com/token",
-        client_id=CLIENT_ID,
-        client_secret=CLIENT_SECRET,
-        scopes=["https://www.googleapis.com/auth/youtube.upload"]
-    )
-    
-    creds.refresh(Request())
-    youtube = build("youtube", "v3", credentials=creds)
-    
-    body = {
-        "snippet": {
-            "title": title[:100],
-            "description": description,
-            "tags": ["horror", "scary", "shorts", "scarystories", "creepy"],
-            "categoryId": "24"
-        },
-        "status": {
-            "privacyStatus": "public",
-            "selfDeclaredMadeForKids": False
-        }
-    }
-    
-    media = MediaFileUpload(video_path, chunksize=-1, resumable=True)
-    request = youtube.videos().insert(part="snippet,status", body=body, media_body=media)
-    
-    response = None
-    while response is None:
-        status, response = request.next_chunk()
-        if status:
-            print(f"Uploaded {int(status.progress() * 100)}%")
-            
-    print(f"Video uploaded successfully! Video ID: {response.get('id')}")
-
-# Pipeline Execution
+# ---------------------------------------------------------------------------
+# MAIN PIPELINE EXECUTION
+# ---------------------------------------------------------------------------
 def main():
-    print("Generating story and prompts...")
-    story, prompts = generate_content()
+    print("Generating Horror Story & Prompts...")
+    story, prompts = generate_story_and_prompts()
     
-    print("Generating voiceover...")
-    asyncio.run(generate_audio(story))
+    print("Generating Voiceover...")
+    asyncio.run(generate_voiceover(story))
     
-    print("Generating images in parallel...")
-    image_files = download_images_parallel(prompts)
-        
-    print("Creating video...")
-    create_video(story, image_files, "voiceover.mp3")
+    print("Downloading Visual Assets...")
+    images = download_images(prompts)
     
-    print("Uploading to YouTube...")
-    title = f"Scary Story: {story[:40]}... #Shorts"
-    upload_to_youtube("final_short.mp4", title, story + "\n\n#horror #shorts #scary")
+    print("Rendering Final Video...")
+    assemble_video(story, images, "voiceover.mp3", "final_short.mp4")
+    print("DONE! Your video is ready at: final_short.mp4")
 
 if __name__ == "__main__":
     main()
+    
