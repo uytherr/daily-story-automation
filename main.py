@@ -9,18 +9,22 @@ import edge_tts
 from groq import Groq
 from moviepy.editor import ImageClip, AudioFileClip, concatenate_videoclips
 
-# Environment Variables
+# ---------------------------------------------------------------------------
+# Environment Variables & Client Setup
+# ---------------------------------------------------------------------------
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+if not GROQ_API_KEY:
+    raise RuntimeError("GROQ_API_KEY environment variable is not set. Add it to GitHub Secrets.")
 
-# Initialize Groq Client
 groq_client = Groq(api_key=GROQ_API_KEY)
 
-# Dynamic model selection to prevent hardcoded model errors
+# ---------------------------------------------------------------------------
+# Dynamic Model Selection
+# ---------------------------------------------------------------------------
 def get_working_model():
     try:
         models_page = groq_client.models.list()
         
-        # Filter out audio, vision, guardrails, and non-chat models
         valid_models = []
         for m in models_page.data:
             m_id = m.id.lower()
@@ -43,30 +47,35 @@ def get_working_model():
     except Exception as e:
         print(f"Error fetching dynamic models: {e}")
         
-    raise RuntimeError("No available text chat models were found on your Groq API key.")
+    print("Defaulting to llama-3.3-70b-versatile fallback model.")
+    return "llama-3.3-70b-versatile"
 
-# 1. Viral Script Generation
+# ---------------------------------------------------------------------------
+# 1. Complete Horror Story Script Generation
+# ---------------------------------------------------------------------------
 def generate_content():
     selected_model = get_working_model()
     
     system_prompt = (
-        "You are an expert horror YouTube Shorts writer. "
-        "Do NOT include thinking processes, intros, or markdown. Return ONLY the exact structure requested."
+        "You are an expert horror narrative writer for YouTube Shorts. "
+        "Do NOT include thinking processes, explanations, or markdown syntax like **. "
+        "Return ONLY the requested labels."
     )
     
     user_prompt = """
-    Create a 30-second horror short script designed for high retention and viral engagement on YouTube Shorts.
+    Write a complete, self-contained terrifying horror story that happens entirely at a train station late at night.
     
-    CRITICAL STRUCTURE REQUIREMENTS:
-    1. HOOK (0-3s): Start instantly in the middle of terrifying action. No pleasantries.
-    2. TWIST (20-25s): End with a sudden, disturbing twist or cliffhanger that forces viewers to rewatch.
-    3. VISUALS: Highly descriptive, vivid, atmospheric imagery prompts optimized for AI art generators.
+    CRITICAL REQUIREMENTS FOR THE STORY:
+    1. INTRO: MUST start EXACTLY with: "Welcome back horror lovers. Today we will count down five unnerving reasons you should never stay late at an abandoned train station..." followed by a creepy reason.
+    2. NARRATIVE: Tell a full, scary, complete narrative at the station. Do not leave a cliffhanger; complete the event.
+    3. OUTRO: MUST end EXACTLY with a unique variation of this warning: "...because if you don't look behind you, it might happen with you."
+    4. LENGTH: The narration text MUST be between 120 and 170 words long to guarantee the video lasts at least 40 to 60 seconds.
     
-    Return response in this exact format:
-    STORY: <The narrated horror story, strictly 50 to 60 words>
-    PROMPT1: <Detailed cinematic horror image prompt for scene 1>
-    PROMPT2: <Detailed cinematic horror image prompt for scene 2>
-    PROMPT3: <Detailed cinematic horror image prompt for scene 3>
+    Return response in this EXACT format:
+    STORY: <Full narrated horror story matching all intro, station setting, plot completion, and outro rules>
+    PROMPT1: <Detailed cinematic dark horror image prompt of the train station platform>
+    PROMPT2: <Detailed cinematic dark horror image prompt of a scary phantom train or entity on tracks>
+    PROMPT3: <Detailed cinematic dark horror image prompt of the terrifying conclusion at the station>
     """
     
     response = groq_client.chat.completions.create(
@@ -89,30 +98,47 @@ def generate_content():
             if ":" in line:
                 prompts.append(line.split(":", 1)[1].strip())
             
-    if not prompts:
+    if not story:
+        story = (
+            "Welcome back horror lovers. Today we will count down five unnerving reasons you should never stay late at an abandoned train station. "
+            "At 2 AM, Mark sat alone on the cold platform bench waiting for a train that hadn't run in thirty years. "
+            "Suddenly, a heavy screech of rusted wheels echoed through the fog. A pitch-black train pulled up, its windows filled with pale, motionless faces staring right at him. "
+            "The rusted doors opened with a wet thud. As Mark stepped back to run, an icy hand grabbed his throat from behind and pulled him into the dark. "
+            "Police found only his phone the next morning. Be careful waiting alone at night, because if you don't look behind you, it might happen with you."
+        )
+
+    if len(prompts) < 3:
         prompts = [
-            "Terrifying dark corridor, cinematic horror lighting, photorealistic, 8k resolution",
-            "Creepy monster shadow looming in a dark room, hyperrealistic horror",
-            "Scary uncanny face emerging from the dark wall, eerie atmosphere"
+            "Abandoned eerie train station platform at night, thick fog, cinematic horror lighting, 8k resolution, vertical 9:16",
+            "Ghostly black train arriving on rusted tracks, pale faces in dark windows, terrifying atmosphere, hyperrealistic horror",
+            "Creepy shadow hand reaching from the dark on an empty train platform, eerie horror scene"
         ]
         
     return story, prompts
 
-# 2. Voiceover Generation
+# ---------------------------------------------------------------------------
+# 2. Voiceover Generation (edge-tts)
+# ---------------------------------------------------------------------------
 async def generate_audio(text, output_file="voiceover.mp3"):
     communicate = edge_tts.Communicate(text, "en-US-ChristopherNeural")
     await communicate.save(output_file)
 
-# 3. Parallel Image Downloading with Fallback Support
+# ---------------------------------------------------------------------------
+# 3. Parallel Image Downloading with Fallbacks
+# ---------------------------------------------------------------------------
 def download_single_image(args):
     prompt, filename = args
     encoded_prompt = requests.utils.quote(prompt)
+    
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    }
     
     url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=1080&height=1920&model=flux&seed={random.randint(1, 999999)}"
     
     for attempt in range(3):
         try:
-            response = requests.get(url, timeout=30)
+            response = requests.get(url, headers=headers, timeout=30)
             if response.status_code == 200 and len(response.content) > 1000:
                 with open(filename, "wb") as f:
                     f.write(response.content)
@@ -122,11 +148,10 @@ def download_single_image(args):
             print(f"Pollinations attempt {attempt + 1} failed for {filename}: {e}")
             time.sleep(2)
             
-    # Backup trigger if Pollinations times out
     print(f"Fallback triggered for {filename}. Fetching backup image...")
-    backup_url = f"https://picsum.photos/1080/1920?blur=2"
+    backup_url = "https://picsum.photos/1080/1920?blur=2"
     try:
-        response = requests.get(backup_url, timeout=30)
+        response = requests.get(backup_url, headers=headers, timeout=30)
         if response.status_code == 200:
             with open(filename, "wb") as f:
                 f.write(response.content)
@@ -135,7 +160,7 @@ def download_single_image(args):
     except Exception as e:
         print(f"Fallback download failed: {e}")
         
-    raise Exception(f"Failed to obtain image for {filename}")
+    raise RuntimeError(f"Failed to obtain image for {filename}")
 
 def download_images_parallel(prompts):
     tasks = [(prompt, f"image_{i}.jpg") for i, prompt in enumerate(prompts)]
@@ -143,9 +168,13 @@ def download_images_parallel(prompts):
         results = list(executor.map(download_single_image, tasks))
     return results
 
-# 4. Fast Video Rendering
+# ---------------------------------------------------------------------------
+# 4. Video Assembly
+# ---------------------------------------------------------------------------
 def create_video(story, image_files, audio_file, output_file="final_short.mp4"):
     audio = AudioFileClip(audio_file)
+    print(f"Total audio duration: {audio.duration:.2f} seconds")
+    
     duration_per_image = audio.duration / len(image_files)
     
     clips = []
@@ -155,6 +184,7 @@ def create_video(story, image_files, audio_file, output_file="final_short.mp4"):
         
     video = concatenate_videoclips(clips, method="compose")
     video = video.set_audio(audio)
+    
     video.write_videofile(
         output_file, 
         fps=30, 
@@ -163,11 +193,19 @@ def create_video(story, image_files, audio_file, output_file="final_short.mp4"):
         preset="ultrafast",
         threads=4
     )
+    
+    video.close()
+    audio.close()
+    for clip in clips:
+        clip.close()
 
+# ---------------------------------------------------------------------------
 # Pipeline Execution
+# ---------------------------------------------------------------------------
 def main():
-    print("Generating story and prompts...")
+    print("Generating complete station horror script...")
     story, prompts = generate_content()
+    print(f"\n--- Generated Story ---\n{story}\n----------------------\n")
     
     print("Generating voiceover...")
     asyncio.run(generate_audio(story))
@@ -175,12 +213,12 @@ def main():
     print("Generating images in parallel...")
     image_files = download_images_parallel(prompts)
         
-    print("Creating video...")
+    print("Creating final video...")
     create_video(story, image_files, "voiceover.mp3")
     
     print("\n--------------------------------------------------")
-    print("SUCCESS! Video generation complete.")
-    print("Your video is saved at: final_short.mp4")
+    print("SUCCESS! Full station horror video generated.")
+    print("Output path: final_short.mp4")
     print("--------------------------------------------------")
 
 if __name__ == "__main__":
