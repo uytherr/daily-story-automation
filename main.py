@@ -45,18 +45,28 @@ def get_working_model():
         
     raise RuntimeError("No available text chat models were found on your Groq API key.")
 
-# 1. Fast Script Generation
+# 1. Viral Script Generation
 def generate_content():
     selected_model = get_working_model()
     
-    system_prompt = "You are a direct horror scriptwriter. Do NOT include thinking process, intros, or explanations. Return ONLY requested output."
+    system_prompt = (
+        "You are an expert horror YouTube Shorts writer. "
+        "Do NOT include thinking processes, intros, or markdown. Return ONLY the exact structure requested."
+    )
+    
     user_prompt = """
-    Generate a 30-second terrifying horror story for YouTube Shorts.
+    Create a 30-second horror short script designed for high retention and viral engagement on YouTube Shorts.
+    
+    CRITICAL STRUCTURE REQUIREMENTS:
+    1. HOOK (0-3s): Start instantly in the middle of terrifying action. No pleasantries.
+    2. TWIST (20-25s): End with a sudden, disturbing twist or cliffhanger that forces viewers to rewatch.
+    3. VISUALS: Highly descriptive, vivid, atmospheric imagery prompts optimized for AI art generators.
+    
     Return response in this exact format:
-    STORY: <The narrated horror story, around 50-60 words>
-    PROMPT1: <Detailed horror image prompt for scene 1>
-    PROMPT2: <Detailed horror image prompt for scene 2>
-    PROMPT3: <Detailed horror image prompt for scene 3>
+    STORY: <The narrated horror story, strictly 50 to 60 words>
+    PROMPT1: <Detailed cinematic horror image prompt for scene 1>
+    PROMPT2: <Detailed cinematic horror image prompt for scene 2>
+    PROMPT3: <Detailed cinematic horror image prompt for scene 3>
     """
     
     response = groq_client.chat.completions.create(
@@ -81,9 +91,9 @@ def generate_content():
             
     if not prompts:
         prompts = [
-            "Terrifying dark corridor, cinematic horror lighting, photorealistic",
-            "Creepy monster shadow in a dark room, hyperrealistic horror",
-            "Scary spooky face emerging from darkness, 8k resolution"
+            "Terrifying dark corridor, cinematic horror lighting, photorealistic, 8k resolution",
+            "Creepy monster shadow looming in a dark room, hyperrealistic horror",
+            "Scary uncanny face emerging from the dark wall, eerie atmosphere"
         ]
         
     return story, prompts
@@ -93,7 +103,7 @@ async def generate_audio(text, output_file="voiceover.mp3"):
     communicate = edge_tts.Communicate(text, "en-US-ChristopherNeural")
     await communicate.save(output_file)
 
-# 3. Parallel Image Downloading with Fallback Support
+# 3. Parallel Image Downloading with Fallback
 def download_single_image(args):
     prompt, filename = args
     encoded_prompt = requests.utils.quote(prompt)
@@ -112,7 +122,7 @@ def download_single_image(args):
             print(f"Pollinations attempt {attempt + 1} failed for {filename}: {e}")
             time.sleep(2)
             
-    # Reliable backup image if Pollinations is offline/timing out
+    # Backup trigger if Pollinations times out
     print(f"Fallback triggered for {filename}. Fetching backup image...")
     backup_url = f"https://picsum.photos/1080/1920?blur=2"
     try:
